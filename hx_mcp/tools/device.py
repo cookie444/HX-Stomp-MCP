@@ -10,6 +10,7 @@ modules and must be gated behind explicit user confirmation.
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterator, Optional
@@ -195,6 +196,32 @@ def read_preset_at(setlist: int, index: int) -> dict:
     except HxError:
         pass
     return {"setlist": setlist, "index": index, "empty": False, "bytes": len(blob), "blocks": blocks}
+
+
+def backup_presets(directory: str = "backups") -> dict:
+    """Read-only backup of every preset to a timestamped JSON file.
+
+    Walks each slot with opcode 4 (read without loading). No writes.
+    """
+    from datetime import datetime
+
+    from hx_mcp import backup as backup_mod
+
+    with open_session() as session:
+        setlist, index, name = session.preset_info()
+        data = backup_mod.capture(session)
+    data["device"] = {"setlist": setlist, "index": index, "name": name}
+    path = os.path.join(directory, f"hx_stomp_{datetime.now():%Y%m%d_%H%M%S}.json")
+    backup_mod.save(data, path)
+    nonempty = sum(1 for p in data["presets"] if p.get("document_b64"))
+    errors = sum(1 for p in data["presets"] if p.get("error"))
+    return {
+        "ok": True,
+        "path": path,
+        "count": len(data["presets"]),
+        "non_empty": nonempty,
+        "errors": errors,
+    }
 
 
 def clear_block(block: int, save: bool = False) -> dict:

@@ -146,8 +146,11 @@ Currently exposed:
 | `get_device_info` | VID/PID, serial, USB release, firmware, loaded preset |
 | `list_setlists` | setlist names |
 | `list_presets` | preset names in a setlist |
-| `read_current_preset` | name, firmware, numeric block list |
+| `read_current_preset` | name, firmware, blocks with **model names** |
+| `read_preset_at` | read a stored preset **without loading it** |
 | `read_footswitch` | a footswitch's config (what it controls, colour) |
+| `model_name` / `find_model` | resolve wire model numbers <-> names |
+| `backup_presets` | read-only backup of every preset to a file |
 | `parse_hlx` | parse an `.hlx` file **offline**, no hardware |
 
 **Write (edit buffer only; a preset reload reverts them)**

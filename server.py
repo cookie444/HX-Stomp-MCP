@@ -119,6 +119,15 @@ def find_model(name: str) -> dict:
 
 
 @mcp.tool()
+def backup_presets() -> dict:
+    """Read-only backup of every preset to a timestamped file in ./backups/.
+
+    Safe: reads each slot without loading it. Returns the file path and counts.
+    """
+    return _guard(device.backup_presets)
+
+
+@mcp.tool()
 def read_footswitch(switch: int) -> dict:
     """A footswitch's configuration: what it controls and its colour (read-only).
 

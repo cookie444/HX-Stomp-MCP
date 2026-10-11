@@ -18,6 +18,7 @@ try:  # mcp < 2
 except ModuleNotFoundError:  # mcp >= 2
     from mcp.server.mcpserver import MCPServer as _Server
 
+from hx_mcp.catalog import default_catalog
 from hx_mcp.files import hlx
 from hx_mcp.session import HxError
 from hx_mcp.tools import device
@@ -62,30 +63,59 @@ def read_current_preset() -> dict:
 
 
 @mcp.tool()
-def set_block_model(block: int, model: int) -> dict:
-    """WRITE: change what a block is, by numeric wire model number (edit buffer).
+def set_block_model(block: int, model: int, save: bool = True) -> dict:
+    """WRITE: change what a block is, by numeric wire model number.
 
-    Reloading the preset reverts it. Model numbers are Helix.sym indices; names
-    need the HX Edit catalog (M2). Not yet saved to a slot.
+    Commits the preset by default so the device is never left on a stranded edit
+    (which breaks on-device editing). Set save=False to leave it in the buffer
+    only, then reload or save before using the panel. Model numbers are Helix.sym
+    indices; use model_name/find_model to resolve names.
 
     Args:
         block: Slot index (0 = input; effect slots are 1..8).
         model: Numeric model number, e.g. 247 is the "Room" reverb.
+        save: Commit the preset after the change (default True).
     """
-    return _guard(device.set_block_model, block, model)
+    return _guard(device.set_block_model, block, model, None, save)
 
 
 @mcp.tool()
-def assign_block_footswitch(block: int, switch: int) -> dict:
-    """WRITE: put a block's on/off (bypass) on a footswitch (edit buffer).
+def assign_block_footswitch(block: int, switch: int, save: bool = True) -> dict:
+    """WRITE: put a block's on/off (bypass) on a footswitch. switch is 1-based.
 
-    Footswitch numbers are 1-based (1, 2, 3). Reloading the preset reverts it.
+    Commits the preset by default (see set_block_model).
 
     Args:
         block: Slot index of the block.
         switch: Footswitch number, 1-based.
+        save: Commit the preset after the change (default True).
     """
-    return _guard(device.assign_block_footswitch, block, switch)
+    return _guard(device.assign_block_footswitch, block, switch, save)
+
+
+@mcp.tool()
+def model_name(number: int) -> dict:
+    """Resolve a numeric wire model number to its name (read-only).
+
+    Needs HX Edit's model data (Helix.sym); returns the number unresolved if it
+    is not installed.
+
+    Args:
+        number: Wire model number, e.g. 247 -> "Room".
+    """
+    catalog = default_catalog()
+    return {"model": number, "name": catalog.display_name(number), "catalog": catalog.available}
+
+
+@mcp.tool()
+def find_model(name: str) -> dict:
+    """Find wire model numbers whose name matches, e.g. "Glitz" -> [490, 491].
+
+    Read-only. Needs HX Edit's model data.
+    """
+    catalog = default_catalog()
+    numbers = catalog.find(name)
+    return {"name": name, "numbers": numbers, "names": {n: catalog.display_name(n) for n in numbers}}
 
 
 @mcp.tool()

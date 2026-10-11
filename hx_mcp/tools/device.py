@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Iterator, Optional
 
 from hx_mcp import session as session_mod
+from hx_mcp.catalog import default_catalog
 from hx_mcp.protocol import opcodes as op
 from hx_mcp.session import HxError, HxTimeout, Session
 from hx_mcp.transport import usb
@@ -185,28 +186,46 @@ def read_current_preset() -> dict:
     }
 
 
-def set_block_model(block: int, model: int, paired: Optional[int] = None) -> dict:
-    """Change what a block is, by numeric wire model number.
+def _commit(session: Session) -> None:
+    """Commit the edit buffer to the loaded preset's slot (flash write).
 
-    Edit-buffer only: the device sounds different immediately, but reloading the
-    preset reverts it. Marks a WRITE. Model numbers are Helix.sym indices; names
-    require the HX Edit catalog (M2).
+    Called after a write by default so the device is never left on a stranded
+    edit buffer, which breaks the on-device edit UI.
+    """
+    setlist, index, name = session.preset_info()
+    session.save_preset(setlist, index, name)
+
+
+def set_block_model(
+    block: int, model: int, paired: Optional[int] = None, save: bool = True
+) -> dict:
+    """Change what a block is, by numeric wire model number (WRITE).
+
+    Model numbers are Helix.sym indices; names need the HX Edit catalog. By
+    default the preset is committed afterwards so the device is never left on a
+    stranded edit (which breaks on-device editing). Pass ``save=False`` to keep
+    it in the buffer only - then you MUST reload (discard) or save before
+    touching the panel.
     """
     with open_session() as session:
         session.set_model(block, model, paired)
-    return {"ok": True, "block": block, "model": model, "paired": paired}
+        if save:
+            _commit(session)
+    return {"ok": True, "block": block, "model": model, "paired": paired, "saved": save}
 
 
-def assign_block_footswitch(block: int, switch: int) -> dict:
-    """Put a block's bypass (on/off) on a footswitch. ``switch`` is 1-based.
+def assign_block_footswitch(block: int, switch: int, save: bool = True) -> dict:
+    """Put a block's bypass (on/off) on a footswitch. ``switch`` is 1-based (WRITE).
 
-    Edit-buffer only. Marks a WRITE.
+    Commits the preset by default (see :func:`set_block_model`).
     """
     if switch < 1:
         raise HxError("footswitch numbers are 1-based (1, 2, 3 ...)")
     with open_session() as session:
         session.assign_bypass_footswitch(block, switch - 1)
-    return {"ok": True, "block": block, "switch": switch}
+        if save:
+            _commit(session)
+    return {"ok": True, "block": block, "switch": switch, "saved": save}
 
 
 def read_footswitch(switch: int) -> dict:
@@ -234,23 +253,27 @@ def read_preset_at(setlist: int, index: int) -> dict:
     return {"setlist": setlist, "index": index, "empty": False, "bytes": len(blob), "blocks": blocks}
 
 
-def clear_block(block: int) -> dict:
+def clear_block(block: int, save: bool = True) -> dict:
     """WRITE: empty a block slot (removes whatever model is there).
 
-    Edit-buffer only; a preset reload reverts it.
+    Commits the preset by default so the device is not left on a stranded edit.
     """
     with open_session() as session:
         session.clear_block(block)
-    return {"ok": True, "block": block, "cleared": True}
+        if save:
+            _commit(session)
+    return {"ok": True, "block": block, "cleared": True, "saved": save}
 
 
-def unassign_block_footswitch(block: int, switch: int) -> dict:
+def unassign_block_footswitch(block: int, switch: int, save: bool = True) -> dict:
     """WRITE: take a block's on/off off a footswitch. ``switch`` is 1-based."""
     if switch < 1:
         raise HxError("footswitch numbers are 1-based (1, 2, 3 ...)")
     with open_session() as session:
         session.unassign_bypass_footswitch(block, switch - 1)
-    return {"ok": True, "block": block, "switch": switch}
+        if save:
+            _commit(session)
+    return {"ok": True, "block": block, "switch": switch, "saved": save}
 
 
 def reload_current_preset() -> dict:
@@ -279,6 +302,7 @@ def save_current_preset(name: Optional[str] = None) -> dict:
 
 def _summarise_tone(tone: Any) -> list[dict]:
     blocks: list[dict] = []
+    catalog = default_catalog()
     if not isinstance(tone, dict):
         return blocks
     for dsp_key in (0, 1):
@@ -311,6 +335,7 @@ def _summarise_tone(tone: Any) -> list[dict]:
                     "slot": i,
                     "kind": kind,
                     "model": model,
+                    "name": catalog.display_name(model) if model is not None else None,
                     "values": values,
                 }
             )

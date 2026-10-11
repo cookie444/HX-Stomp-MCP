@@ -1,43 +1,60 @@
-"""Model catalog: index -> name/range/format, imported from the user's HX Edit.
+"""Model catalog: wire model number <-> name, imported from the user's HX Edit.
 
-Device model numbers and parameter indices are meaningless without the catalog
-of names, ranges and display formats. That catalog lives in HX Edit's data
-files (``HelixModelDefs.bin``, ``HX_ModelCatalog.json``, ``Helix.sym``, and the
-``*.models`` files), which are **Line 6 proprietary data**.
+The device addresses blocks by a **numeric model number**, which is the index
+into HX Edit's ``Helix.sym`` array (833 entries) - verified: ``Helix.sym[247]``
+is ``HD2_ReverbRoomStereo`` ("Room"), matching what the hardware reports.
 
-This project therefore never bundles or redistributes them. It reads them from
-the user's own installed HX Edit at runtime and degrades gracefully when HX
-Edit is absent - numeric block/parameter indices still work without it.
-
-M2 populates this module. For now it only knows how to *find* an install.
+``Helix.sym`` and ``HelixModelDefs.bin`` are **Line 6 proprietary data**. This
+project never bundles or redistributes them; it reads them from the user's own
+HX Edit install at runtime and degrades gracefully when HX Edit is absent
+(numeric indices still work).
 """
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Optional
 
-#: Where HX Edit lands on each platform.
+from hx_mcp.protocol.codec import unpack_values
+
+#: Where HX Edit lands on each platform. ``res`` holds the data files.
 _WINDOWS_ROOTS = [
+    r"C:\Program Files (x86)\Line6\HX Edit",
+    r"C:\Program Files\Line6\HX Edit",
     r"C:\Program Files\Line 6\HX Edit",
     r"C:\Program Files (x86)\Line 6\HX Edit",
+    r"C:\Program Files\Line 6\HX Edit Pro",
 ]
 _MAC_ROOTS = [
     "/Applications/Line 6/HX Edit.app/Contents/Resources",
     "/Applications/HX Edit.app/Contents/Resources",
+    "/Applications/Line6/HX Edit.app/Contents/Resources",
 ]
 _LINUX_ROOTS = [
     os.path.expanduser("~/.local/share/line6/hxedit"),
 ]
 
+#: Files we need from an install.
+_REQUIRED = "Helix.sym"
+
+
+def _res_dir(root: str) -> Optional[str]:
+    """Return the directory holding ``Helix.sym`` under ``root`` (or ``root``)."""
+    for candidate in (os.path.join(root, "res"), root):
+        if os.path.exists(os.path.join(candidate, _REQUIRED)):
+            return candidate
+    return None
+
 
 @dataclass
 class HxEditInstall:
-    root: str
+    root: str  # the directory containing the data files
 
-    def _has(self, *names: str) -> bool:
-        return all(os.path.exists(os.path.join(self.root, n)) for n in names)
+    @property
+    def helix_sym(self) -> str:
+        return os.path.join(self.root, "Helix.sym")
 
     @property
     def model_defs_bin(self) -> Optional[str]:
@@ -50,71 +67,110 @@ class HxEditInstall:
         return path if os.path.exists(path) else None
 
     @property
-    def helix_sym(self) -> Optional[str]:
-        path = os.path.join(self.root, "Helix.sym")
+    def controls_json(self) -> Optional[str]:
+        path = os.path.join(self.root, "HelixControls.json")
         return path if os.path.exists(path) else None
 
     def available(self) -> bool:
-        return bool(self.model_defs_bin or self.model_catalog_json or self.helix_sym)
+        return os.path.exists(self.helix_sym)
 
 
 def find_hx_edit() -> Optional[HxEditInstall]:
     """Locate the user's own HX Edit data. ``None`` when it is not installed."""
-    candidates = _WINDOWS_ROOTS + _MAC_ROOTS + _LINUX_ROOTS
+    candidates: list[str] = []
     env = os.environ.get("HXEDIT_DIR")
     if env:
-        candidates.insert(0, env)
+        candidates.append(env)
+    candidates += _WINDOWS_ROOTS + _MAC_ROOTS + _LINUX_ROOTS
     for root in candidates:
-        if os.path.isdir(root):
-            install = HxEditInstall(root)
-            if install.available():
-                return install
+        res = _res_dir(root)
+        if res:
+            return HxEditInstall(res)
     return None
 
 
-#: A named parameter: its device index, human name, range and display format.
-@dataclass
-class ParamDef:
-    index: int
-    name: str
-    min: float
-    max: float
-    default: float
-    value_type: str
-    display_type: str
-    assign: Optional[int] = None
+#: The suffix Helix.sym uses to split a model's mono and stereo DSP variants.
+_SUFFIXES = ("Mono", "Stereo")
 
 
-@dataclass
-class ModelDef:
-    number: int
-    name: str
-    symbolic_id: str
-    category: str
-    params: list[ParamDef]
+def _base_symbol(symbol: str) -> str:
+    for suffix in _SUFFIXES:
+        if symbol.endswith(suffix):
+            return symbol[: -len(suffix)]
+    return symbol
 
 
 class Catalog:
-    """Index -> name/range mapping. Populated in M2; empty until then."""
+    """Wire model number <-> name mapping, read from HX Edit's files.
+
+    ``symbols[number]`` is the Helix.sym symbol at that index (the wire id);
+    names come from ``HelixModelDefs.bin``, folding the Mono/Stereo split.
+    """
 
     def __init__(self, install: Optional[HxEditInstall] = None) -> None:
         self.install = install if install is not None else find_hx_edit()
-        self.models: dict[int, ModelDef] = {}
+        #: index -> Helix.sym symbol (the wire model number is the index).
+        self.symbols: list[str] = []
+        #: symbolicID -> definition record (name, category, params, ...).
+        self.defs: dict[str, dict] = {}
+        if self.install is not None:
+            self._load()
+
+    def _load(self) -> None:
+        assert self.install is not None
+        try:
+            self.symbols = [
+                str(entry.get("symbol", ""))
+                for entry in json.loads(open(self.install.helix_sym, encoding="utf-8").read())
+            ]
+        except (OSError, json.JSONDecodeError):
+            self.symbols = []
+        path = self.install.model_defs_bin
+        if path:
+            try:
+                records = unpack_values(open(path, "rb").read(), 1)[0]
+            except Exception:  # noqa: BLE001 - degrade to symbol-only names
+                records = []
+            for record in records or []:
+                if isinstance(record, dict) and record.get("symbolicID"):
+                    self.defs[str(record["symbolicID"])] = record
 
     @property
     def available(self) -> bool:
-        return bool(self.models)
+        return bool(self.symbols)
 
-    def model_name(self, number: int) -> str:
-        model = self.models.get(number)
-        return model.name if model else f"model {number}"
+    def display_name(self, number: int) -> str:
+        """Human name for a wire model number, e.g. 491 -> "Glitz"."""
+        if not (0 <= number < len(self.symbols)):
+            return f"model {number}"
+        symbol = self.symbols[number]
+        record = self.defs.get(symbol) or self.defs.get(_base_symbol(symbol))
+        name = (record or {}).get("name")
+        if name:
+            return str(name).strip()
+        return _base_symbol(symbol).replace("HD2_", "")
 
-    def param_name(self, model: int, index: int) -> str:
-        model_def = self.models.get(model)
-        if model_def and 0 <= index < len(model_def.params):
-            return model_def.params[index].name
-        return f"param {index}"
+    def find(self, name: str) -> list[int]:
+        """Every wire model number whose display name matches ``name``."""
+        query = name.strip().lower()
+        out: list[int] = []
+        for index, symbol in enumerate(self.symbols):
+            record = self.defs.get(symbol) or self.defs.get(_base_symbol(symbol))
+            disp = str((record or {}).get("name", "")).strip().lower()
+            if disp == query or _base_symbol(symbol).lower() == query:
+                out.append(index)
+        return out
+
+    def names_for(self, numbers) -> dict[int, str]:
+        return {n: self.display_name(n) for n in numbers}
 
 
-# TODO(M2): parse HelixModelDefs.bin (MessagePack) into ModelDef/ParamDef and
-# join Helix.sym's array index (the device model number) to model names.
+#: Cached default catalog, so tool calls don't reparse ~1 MB every time.
+_default: Optional[Catalog] = None
+
+
+def default_catalog() -> Catalog:
+    global _default
+    if _default is None:
+        _default = Catalog()
+    return _default

@@ -18,6 +18,7 @@ from hx_mcp import session as session_mod
 from hx_mcp.catalog import default_catalog
 from hx_mcp.protocol import opcodes as op
 from hx_mcp.session import HxError, HxTimeout, Session
+from hx_mcp.session_manager import manager
 from hx_mcp.transport import usb
 
 
@@ -38,122 +39,55 @@ class DeviceInfo:
     error: Optional[str] = None
 
 
-def _open_with_retry(found: usb.FoundDevice) -> tuple[usb.UsbWire, Session]:
-    """Open interface 0 and bring a session up, retrying exactly once.
-
-    The device ignores a fresh session's *opening handshake* on almost exactly
-    every other attempt - a deterministic alternation - so the very first
-    request of a second consecutive session times out. A single try therefore
-    makes repeated calls (every MCP tool call after the first) unreliable. On a
-    timeout or protocol error we release the handle, re-enumerate a clean one,
-    and try once more, mirroring the reference implementation. A plain USB
-    error (busy, access denied) is not retried.
-    """
-    last: Optional[Exception] = None
-    for attempt in range(2):
-        wire: Optional[usb.UsbWire] = None
-        try:
-            wire = usb.UsbWire(found.device).open()
-            return wire, Session.bring_up(wire)
-        except (HxTimeout, HxError) as exc:
-            last = exc
-            if wire is not None:
-                wire.close()
-            else:
-                usb.dispose(found)
-            if attempt == 0:
-                usb.dispose(found)
-                fresh = usb.list_devices()
-                if not fresh:
-                    raise
-                found = fresh[0]
-                for extra in fresh[1:]:
-                    usb.dispose(extra)
-    raise last  # type: ignore[misc]
-
-
 @contextmanager
 def open_session(found: Optional[usb.FoundDevice] = None) -> Iterator[Session]:
-    """Open and bring up a session; always release the interface afterwards.
+    """Yield the process-wide persistent session.
 
-    Pass an already-enumerated ``found`` to avoid opening a second handle to
-    the same device: pyusb's ``find`` opens the device, and holding one handle
-    while claiming the interface on another is what produces "Access denied"
-    (both from other processes and from this one). When ``found`` is omitted we
-    enumerate and own the handle ourselves.
+    The session stays open between tool calls (see :mod:`hx_mcp.session_manager`),
+    so the device is drained and kept alive continuously - an unsaved edit can sit
+    in the buffer safely and the panel can reload/discard it as usual. All wire
+    access is serialised by the manager's lock, so the keepalive thread and tool
+    calls never touch the endpoints at once.
     """
-    owned = found is None
-    devices: list[usb.FoundDevice] = []
-    if found is None:
-        devices = usb.list_devices()
-        if not devices:
-            raise HxError(
-                "no HX Stomp (VID 0E41) found. Check the USB cable and that "
-                "WinUSB is bound to MI_00 (see README: Zadig step)."
-            )
-        found = devices[0]
-        for extra in devices[1:]:
-            usb.dispose(extra)
-    wire: Optional[usb.UsbWire] = None
-    session: Optional[Session] = None
-    try:
-        wire, session = _open_with_retry(found)
+    with manager.session() as session:
         yield session
-    finally:
-        if session is not None:
-            try:
-                session.close()
-            except Exception:
-                pass
-        if wire is not None:
-            wire.close()
-        if owned:
-            for d in devices:
-                usb.dispose(d)
 
 
 def get_device_info() -> dict:
     """Identity of the connected device. Read-only, never writes."""
-    try:
-        devices = usb.list_devices()
-    except Exception as exc:
-        return asdict(DeviceInfo(connected=False, error=str(exc)))
-    try:
-        if not devices:
-            return asdict(
-                DeviceInfo(
-                    connected=False,
-                    error="no HX Stomp found on the bus (is WinUSB bound to MI_00?)",
-                )
+    found = manager.device_info()
+    if found is None:
+        reason = manager._last_error
+        return asdict(
+            DeviceInfo(
+                connected=False,
+                error=str(reason)
+                if reason
+                else "no HX Stomp found on the bus (is WinUSB bound to MI_00?)",
             )
-        found = devices[0]
-        info = DeviceInfo(
-            connected=True,
-            name=found.name,
-            product_id=found.product_id,
-            serial=found.serial,
-            usb_version=found.usb_version,
         )
-        try:
-            # Reuse the already-open handle; opening a second one while this
-            # one is live is what makes the claim fail with "Access denied".
-            with open_session(found) as session:
-                setlist, index, name = session.preset_info()
-                info.setlist = setlist
-                info.preset_index = index
-                info.preset_name = name
-                try:
-                    blob = session.read_preset_blob()
-                    _, _, tone = session_mod.parse_preset(blob)
-                    info.firmware = session_mod.firmware_version(tone)
-                except HxError:
-                    pass
-        except Exception as exc:
-            info.error = str(exc)
-        return asdict(info)
-    finally:
-        for d in devices:
-            usb.dispose(d)
+    info = DeviceInfo(
+        connected=True,
+        name=found.name,
+        product_id=found.product_id,
+        serial=found.serial,
+        usb_version=found.usb_version,
+    )
+    try:
+        with open_session() as session:
+            setlist, index, name = session.preset_info()
+            info.setlist = setlist
+            info.preset_index = index
+            info.preset_name = name
+            try:
+                blob = session.read_preset_blob()
+                _, _, tone = session_mod.parse_preset(blob)
+                info.firmware = session_mod.firmware_version(tone)
+            except HxError:
+                pass
+    except Exception as exc:
+        info.error = str(exc)
+    return asdict(info)
 
 
 def list_presets(setlist: int = 0) -> dict:
@@ -211,25 +145,23 @@ def set_block_model(
 ) -> dict:
     """Change what a block is, by numeric wire model number (WRITE).
 
-    A write always finishes cleanly: with ``save=True`` the change is committed
-    to the preset (permanent); otherwise it is applied and then immediately
-    discarded by reloading, so the device is NEVER left on a stranded edit
-    (which breaks on-device editing and can wedge the pedal). Model numbers are
-    Helix.sym indices; names need the HX Edit catalog.
+    ``save=True`` commits it to the preset (permanent). Otherwise the change
+    lives in the edit buffer only: the server's persistent session keeps the
+    device drained meanwhile, and reloading/discarding (or scrolling the panel)
+    reverts it. Model numbers are Helix.sym indices; names need the HX Edit
+    catalog.
     """
     with open_session() as session:
         session.set_model(block, model, paired)
         if save:
             _commit(session)
-        else:
-            _discard(session)
     return {"ok": True, "block": block, "model": model, "paired": paired, "saved": save}
 
 
 def assign_block_footswitch(block: int, switch: int, save: bool = False) -> dict:
     """Put a block's bypass (on/off) on a footswitch. ``switch`` is 1-based (WRITE).
 
-    Committed when ``save=True``, otherwise applied then discarded.
+    Committed when ``save=True``; otherwise edit-buffer only.
     """
     if switch < 1:
         raise HxError("footswitch numbers are 1-based (1, 2, 3 ...)")
@@ -237,8 +169,6 @@ def assign_block_footswitch(block: int, switch: int, save: bool = False) -> dict
         session.assign_bypass_footswitch(block, switch - 1)
         if save:
             _commit(session)
-        else:
-            _discard(session)
     return {"ok": True, "block": block, "switch": switch, "saved": save}
 
 
@@ -270,14 +200,12 @@ def read_preset_at(setlist: int, index: int) -> dict:
 def clear_block(block: int, save: bool = False) -> dict:
     """WRITE: empty a block slot (removes whatever model is there).
 
-    Committed when ``save=True``, otherwise applied then discarded.
+    Committed when ``save=True``; otherwise edit-buffer only.
     """
     with open_session() as session:
         session.clear_block(block)
         if save:
             _commit(session)
-        else:
-            _discard(session)
     return {"ok": True, "block": block, "cleared": True, "saved": save}
 
 
@@ -289,8 +217,6 @@ def unassign_block_footswitch(block: int, switch: int, save: bool = False) -> di
         session.unassign_bypass_footswitch(block, switch - 1)
         if save:
             _commit(session)
-        else:
-            _discard(session)
     return {"ok": True, "block": block, "switch": switch, "saved": save}
 
 

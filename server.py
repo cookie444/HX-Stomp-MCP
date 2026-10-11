@@ -66,16 +66,15 @@ def read_current_preset() -> dict:
 def set_block_model(block: int, model: int, save: bool = False) -> dict:
     """WRITE: change what a block is, by numeric wire model number.
 
-    A write always finishes cleanly: with save=True the change is committed to
-    the preset (permanent); otherwise it is applied and then discarded, so the
-    device is never left on a stranded edit (which breaks on-device editing and
-    can wedge the pedal). Model numbers are Helix.sym indices; use
-    model_name/find_model for names.
+    save=True commits it to the preset (permanent). Otherwise it lives in the
+    edit buffer only: the server's persistent session keeps the device drained,
+    and the panel (scrolling) or reload_current_preset reverts it.
+    Model numbers are Helix.sym indices; use model_name/find_model for names.
 
     Args:
         block: Slot index (0 = input; effect slots are 1..8).
         model: Numeric model number, e.g. 247 is the "Room" reverb.
-        save: True commits permanently; False (default) applies then discards.
+        save: True commits permanently; False (default) edit-buffer only.
     """
     return _guard(device.set_block_model, block, model, None, save)
 
@@ -84,12 +83,12 @@ def set_block_model(block: int, model: int, save: bool = False) -> dict:
 def assign_block_footswitch(block: int, switch: int, save: bool = False) -> dict:
     """WRITE: put a block's on/off (bypass) on a footswitch. switch is 1-based.
 
-    Committed when save=True, otherwise applied then discarded.
+    Committed when save=True; otherwise edit-buffer only.
 
     Args:
         block: Slot index of the block.
         switch: Footswitch number, 1-based.
-        save: True commits permanently; False (default) applies then discards.
+        save: True commits permanently; False (default) edit-buffer only.
     """
     return _guard(device.assign_block_footswitch, block, switch, save)
 

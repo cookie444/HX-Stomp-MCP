@@ -3,30 +3,64 @@
 
 Run via an MCP client (OpenCode/Claude/Cursor) or directly:
 
-    .venv\\Scripts\\python server.py
+    .venv\\Scripts\\python.exe server.py
 
 Exposes read-only tools plus edit-buffer writes (set block model, footswitch
 assign, reload/save). Firmware/DFU is never touched.
+
+⚠️ DESKTOP BETA: host-side edits leave the pedal unable to scroll/switch presets
+and can wedge it (recover by pulling the 9V power adapter). Reads are always
+safe. See README.
 """
 
 from __future__ import annotations
 
+import json
+
 # The MCP SDK renamed FastMCP to MCPServer in v2; support both. The subset we
-# use (``.tool()`` and ``.run()``) is identical across them.
+# use (``.tool()``, ``.resource()`` and ``.run()``) is identical across them.
 try:  # mcp < 2
     from mcp.server.fastmcp import FastMCP as _Server
 except ModuleNotFoundError:  # mcp >= 2
     from mcp.server.mcpserver import MCPServer as _Server
+
+try:
+    from mcp.types import ToolAnnotations
+except Exception:  # pragma: no cover - very old SDKs
+    ToolAnnotations = None  # type: ignore
 
 from hx_mcp.catalog import default_catalog
 from hx_mcp.files import hlx
 from hx_mcp.session import HxError
 from hx_mcp.tools import device
 
+#: Read-only: safe, never changes the device (and has never wedged it).
+READ = ToolAnnotations(readOnlyHint=True) if ToolAnnotations else None
+#: Edits the edit buffer / preset. Beta: can wedge the pedal (see README).
+EDIT = (
+    ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False)
+    if ToolAnnotations
+    else None
+)
+#: Restores the preset; not destructive, idempotent.
+RELOAD = (
+    ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True)
+    if ToolAnnotations
+    else None
+)
+
+
+def _ann(a):
+    return {"annotations": a} if a is not None else {}
+
+
 mcp = _Server("hx-stomp")
 
 
-@mcp.tool()
+# ------------------------------------------------------------- read tools ---
+
+
+@mcp.tool(**_ann(READ))
 def get_device_info() -> dict:
     """Identity and version of the connected Line 6 HX Stomp (read-only).
 
@@ -36,13 +70,13 @@ def get_device_info() -> dict:
     return device.get_device_info()
 
 
-@mcp.tool()
+@mcp.tool(**_ann(READ))
 def list_setlists() -> dict:
     """List the device's setlists by name (read-only)."""
     return _guard(device.list_setlists)
 
 
-@mcp.tool()
+@mcp.tool(**_ann(READ))
 def list_presets(setlist: int = 0) -> dict:
     """List preset names in a setlist, in order (read-only).
 
@@ -52,48 +86,39 @@ def list_presets(setlist: int = 0) -> dict:
     return _guard(device.list_presets, setlist)
 
 
-@mcp.tool()
+@mcp.tool(**_ann(READ))
 def read_current_preset() -> dict:
-    """Summarise the loaded preset: name, firmware, and numeric block list.
+    """Summarise the loaded preset: name, firmware, and blocks with model names.
 
-    Block and parameter names require the HX Edit catalog (M2); until then the
-    values are numeric indices. Read-only.
+    Block and parameter names come from your HX Edit install. Read-only.
     """
     return _guard(device.read_current_preset)
 
 
-@mcp.tool()
-def set_block_model(block: int, model: int, save: bool = False) -> dict:
-    """WRITE: change what a block is, by numeric wire model number.
+@mcp.tool(**_ann(READ))
+def read_preset_at(setlist: int, index: int) -> dict:
+    """Read a stored preset by slot WITHOUT loading it (read-only).
 
-    save=True commits it to the preset (permanent). Otherwise it lives in the
-    edit buffer only: the server's persistent session keeps the device drained,
-    and the panel (scrolling) or reload_current_preset reverts it.
-    Model numbers are Helix.sym indices; use model_name/find_model for names.
+    Reads flash, so it shows what is saved, unaffected by the edit buffer.
 
     Args:
-        block: Slot index (0 = input; effect slots are 1..8).
-        model: Numeric model number, e.g. 247 is the "Room" reverb.
-        save: True commits permanently; False (default) edit-buffer only.
+        setlist: Setlist number, 0-based.
+        index: Preset index within the setlist, 0-based.
     """
-    return _guard(device.set_block_model, block, model, None, save)
+    return _guard(device.read_preset_at, setlist, index)
 
 
-@mcp.tool()
-def assign_block_footswitch(block: int, switch: int, save: bool = False) -> dict:
-    """WRITE: put a block's on/off (bypass) on a footswitch. switch is 1-based.
-
-    Committed when save=True; otherwise edit-buffer only.
+@mcp.tool(**_ann(READ))
+def read_footswitch(switch: int) -> dict:
+    """A footswitch's configuration: what it controls and its colour (read-only).
 
     Args:
-        block: Slot index of the block.
         switch: Footswitch number, 1-based.
-        save: True commits permanently; False (default) edit-buffer only.
     """
-    return _guard(device.assign_block_footswitch, block, switch, save)
+    return _guard(device.read_footswitch, switch)
 
 
-@mcp.tool()
+@mcp.tool(**_ann(READ))
 def model_name(number: int) -> dict:
     """Resolve a numeric wire model number to its name (read-only).
 
@@ -107,7 +132,7 @@ def model_name(number: int) -> dict:
     return {"model": number, "name": catalog.display_name(number), "catalog": catalog.available}
 
 
-@mcp.tool()
+@mcp.tool(**_ann(READ))
 def find_model(name: str) -> dict:
     """Find wire model numbers whose name matches, e.g. "Glitz" -> [490, 491].
 
@@ -118,7 +143,7 @@ def find_model(name: str) -> dict:
     return {"name": name, "numbers": numbers, "names": {n: catalog.display_name(n) for n in numbers}}
 
 
-@mcp.tool()
+@mcp.tool(**_ann(READ))
 def backup_presets() -> dict:
     """Read-only backup of every preset to a timestamped file in ./backups/.
 
@@ -127,52 +152,7 @@ def backup_presets() -> dict:
     return _guard(device.backup_presets)
 
 
-@mcp.tool()
-def read_footswitch(switch: int) -> dict:
-    """A footswitch's configuration: what it controls and its colour (read-only).
-
-    Args:
-        switch: Footswitch number, 1-based.
-    """
-    return _guard(device.read_footswitch, switch)
-
-
-@mcp.tool()
-def read_preset_at(setlist: int, index: int) -> dict:
-    """Read a stored preset by slot WITHOUT loading it (read-only).
-
-    Reads flash, so it shows what is saved, unaffected by the edit buffer.
-
-    Args:
-        setlist: Setlist number, 0-based.
-        index: Preset index within the setlist, 0-based.
-    """
-    return _guard(device.read_preset_at, setlist, index)
-
-
-@mcp.tool()
-def reload_current_preset() -> dict:
-    """Discard any unsaved edit buffer by re-loading the current preset.
-
-    Use after host edits you don't want to keep, or to un-stick a front panel
-    showing a stranded edit.
-    """
-    return _guard(device.reload_current_preset)
-
-
-@mcp.tool()
-def save_current_preset(name: str = "") -> dict:
-    """DESTRUCTIVE: commit the edit buffer to the current preset's slot (flash).
-
-    Overwrites the slot. Back up first.
-
-    Args:
-        name: New preset name; empty keeps the current name.
-    """
-    return _guard(device.save_current_preset, name or None)
-
-
-@mcp.tool()
+@mcp.tool(**_ann(READ))
 def parse_hlx(path: str) -> dict:
     """Parse an .hlx preset file offline - no hardware required (read-only).
 
@@ -183,11 +163,119 @@ def parse_hlx(path: str) -> dict:
         preset = hlx.load(path)
     except hlx.HlxError as exc:
         return {"ok": False, "error": str(exc)}
-    return {
-        "ok": True,
-        "name": preset.name,
-        "blocks": preset.blocks,
-    }
+    return {"ok": True, "name": preset.name, "blocks": preset.blocks}
+
+
+# ------------------------------------------------------------ write tools ---
+
+
+@mcp.tool(**_ann(EDIT))
+def set_block_model(block: int, model: int, save: bool = False) -> dict:
+    """WRITE (beta): change what a block is, by numeric wire model number.
+
+    save=True commits it to the preset (permanent). Otherwise it lives in the
+    edit buffer only. ⚠️ Editing can leave the pedal unable to scroll presets -
+    build, save, reload, then use the panel. Model numbers are Helix.sym
+    indices; use model_name/find_model for names.
+
+    Args:
+        block: Slot index (0 = input; effect slots are 1..8).
+        model: Numeric model number, e.g. 247 is the "Room" reverb.
+        save: True commits permanently; False (default) edit-buffer only.
+    """
+    return _guard(device.set_block_model, block, model, None, save)
+
+
+@mcp.tool(**_ann(EDIT))
+def assign_block_footswitch(block: int, switch: int, save: bool = False) -> dict:
+    """WRITE (beta): put a block's on/off (bypass) on a footswitch. 1-based.
+
+    Committed when save=True; otherwise edit-buffer only.
+
+    Args:
+        block: Slot index of the block.
+        switch: Footswitch number, 1-based.
+        save: True commits permanently; False (default) edit-buffer only.
+    """
+    return _guard(device.assign_block_footswitch, block, switch, save)
+
+
+@mcp.tool(**_ann(EDIT))
+def clear_block(block: int, save: bool = False) -> dict:
+    """WRITE (beta): empty a block slot.
+
+    Args:
+        block: Slot index of the block.
+        save: True commits permanently; False (default) edit-buffer only.
+    """
+    return _guard(device.clear_block, block, save)
+
+
+@mcp.tool(**_ann(EDIT))
+def unassign_block_footswitch(block: int, switch: int, save: bool = False) -> dict:
+    """WRITE (beta): take a block's on/off off a footswitch. ``switch`` 1-based.
+
+    Args:
+        block: Slot index of the block.
+        switch: Footswitch number, 1-based.
+        save: True commits permanently; False (default) edit-buffer only.
+    """
+    return _guard(device.unassign_block_footswitch, block, switch, save)
+
+
+@mcp.tool(**_ann(EDIT))
+def save_current_preset(name: str = "") -> dict:
+    """WRITE (destructive, beta): commit the edit buffer to the preset's slot.
+
+    Overwrites the slot permanently. Back up first.
+
+    Args:
+        name: New preset name; empty keeps the current name.
+    """
+    return _guard(device.save_current_preset, name or None)
+
+
+@mcp.tool(**_ann(RELOAD))
+def reload_current_preset() -> dict:
+    """Re-load the current preset, discarding any unsaved edit buffer.
+
+    Use after host edits you don't want to keep, or to un-stick a front panel
+    showing a stranded edit. Not destructive.
+    """
+    return _guard(device.reload_current_preset)
+
+
+# -------------------------------------------------------------- resources ---
+
+
+@mcp.resource(
+    "hx://device/info",
+    name="device-info",
+    description="Identitiy and loaded preset of the connected HX Stomp, as JSON.",
+    mime_type="application/json",
+)
+def resource_device_info() -> str:
+    return json.dumps(device.get_device_info(), indent=2)
+
+
+@mcp.resource(
+    "hx://catalog/models",
+    name="model-catalog",
+    description="Wire model number -> name, imported from the user's HX Edit, as JSON.",
+    mime_type="application/json",
+)
+def resource_model_catalog() -> str:
+    catalog = default_catalog()
+    models = [
+        {"number": i, "name": catalog.display_name(i), "symbol": sym}
+        for i, sym in enumerate(catalog.symbols)
+    ]
+    return json.dumps(
+        {"available": catalog.available, "count": len(models), "models": models}, indent=1
+    )
+
+
+# ----------------------------------------------------------------- helpers ---
 
 
 def _guard(func, *args) -> dict:

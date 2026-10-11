@@ -161,15 +161,29 @@ Currently exposed:
 | `backup_presets` | read-only backup of every preset to a file |
 | `parse_hlx` | parse an `.hlx` file **offline**, no hardware |
 
-**Write (edit buffer only; a preset reload reverts them)**
+**Write (edit buffer only unless `save=True`; see the desktop-beta caveat)**
 
 | Tool | What it does |
 |---|---|
 | `set_block_model` | change what a block is, by numeric model number |
 | `assign_block_footswitch` | put a block's on/off (bypass) on a footswitch |
+| `clear_block` | empty a block slot |
+| `unassign_block_footswitch` | take a block's bypass off a footswitch |
+| `save_current_preset` | commit the edit buffer to the slot (permanent) |
+| `reload_current_preset` | discard the edit buffer |
 
-Saving to a slot, IR upload/delete, global writes and slot restore land in
-M4-M8 and must require explicit user confirmation.
+Tools carry MCP **annotations**: read-only tools set `readOnlyHint`, the edit
+tools set `destructiveHint`, so clients can gate them.
+
+**Resources**
+
+| URI | What |
+|---|---|
+| `hx://device/info` | connected device identity + loaded preset (JSON) |
+| `hx://catalog/models` | wire model number -> name, from your HX Edit (JSON) |
+
+IR upload/delete, global writes and slot restore land in M4-M8 and must require
+explicit user confirmation.
 
 ---
 

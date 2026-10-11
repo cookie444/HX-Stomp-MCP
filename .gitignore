@@ -15,6 +15,9 @@ captures/
 # Local machine config (contains absolute personal paths). Ship the example.
 opencode.jsonc
 
+# Local backups of the user's own presets - NEVER commit these.
+backups/
+
 # Local presets / firmware / backups
 *.hlx
 !opencode.example.jsonc

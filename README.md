@@ -16,15 +16,15 @@ IRs, globals and backups.
 | Milestone | State |
 |---|---|
 | **M0 Handshake** - open MI_00, read identity/version | **PASSED** on hardware: USB release 2.00, firmware 3.80 |
-| M1 read/edit buffer, block/param enumeration | not started |
-| M2 model catalog (names/ranges from HX Edit) | not started |
-| M3 live edit | partial: set block model, enable/disable (edit buffer) |
+| M1 read buffer, block/param enumeration | partial: numeric blocks, with names |
+| M2 model catalog (name <-> number from HX Edit) | **done**: wire id = `Helix.sym` index (247=Room, validated) |
+| M3 live edit | **code present but UNSAFE** - see Known issues |
 | M4 save/load, setlists, favourites | not started |
-| M5 snapshots + controller assigns | partial: bypass assign to a footswitch |
+| M5 snapshots + controller assigns | partial: bypass assign (**UNSAFE**) |
 | M6 IR manager (destructive, guarded) | not started |
 | M7 globals | not started |
-| M8 backup/restore (.hxb/.hlx) | container header only |
-| M9 packaging/docs | offline tests + MCP server scaffold done |
+| M8 backup/restore (.hxb/.hlx) | partial: **read-only preset backup works**; restore not built |
+| M9 packaging/docs | offline tests, MCP server, persistent session |
 
 The codec, transport, session engine, an **offline test suite** and a working
 M0 probe are in place. **M0 has passed against a real HX Stomp** (USB release
@@ -159,6 +159,66 @@ Currently exposed:
 
 Saving to a slot, IR upload/delete, global writes and slot restore land in
 M4-M8 and must require explicit user confirmation.
+
+---
+
+## Known issues
+
+### Host-side writes can wedge the HX Stomp - currently unsafe
+
+Changing a block's model (and likely the other write tools) has repeatedly driven
+the test unit into a state where the **front-panel editing freezes and the device
+drops off the USB bus** (`CM_PROB_PHANTOM`). Recovery is a full **9V power pull**
+(a USB replug is not enough); a factory reset is the last resort and wipes user
+data.
+
+It is **not** the edit itself - the write is acknowledged and the new model
+reads back correctly. It happens both when the host disconnects immediately and
+when it keeps a persistent session open, so it is not the "stranded edit" case
+the reference projects describe. Reads have never caused it (thousands of preset
+reads and a full 126-preset backup, no issues).
+
+**Until this is understood, treat the server as read-only on real hardware.**
+
+- Safe: `get_device_info`, `list_setlists`, `list_presets`, `read_current_preset`,
+  `read_preset_at`, `read_footswitch`, `model_name`, `find_model`, and the backup
+  script.
+- Unsafe (do not call): `set_block_model`, `assign_block_footswitch`,
+  `clear_block`, `unassign_block_footswitch`, `save_current_preset`.
+- Do not reload or scroll the pedal while an uncommitted host edit sits in the
+  buffer.
+
+### A drain loop that acknowledges after every read desyncs the session
+
+Draining unsolicited notifications is required (an unread queue is the #1 wedge
+cause), but **acknowledging after every individual read** burns sequence numbers
+mid-transaction, and the *next* request then times out - the exact trap the
+reference documents. The normal request flow (drain, then acknowledge idle
+channels, with the busy channel's acknowledgement riding its own frame) is
+correct; never add a blanket "ack after each read" loop.
+
+### Persistent session
+
+`hx_mcp/session_manager.py` keeps one session open with a background
+drain/keepalive thread (like HX Edit). It fixes "Access denied" and the
+alternating opening-handshake problem, and lets an unsaved edit persist across
+tool calls - but it did **not** prevent the write-wedge above.
+
+---
+
+## Backup (read-only)
+
+`backup_now.py` walks every preset slot with opcode 4 (read a stored preset
+*without* loading it) and writes a timestamped JSON file into `backups/`:
+base64-encoded `l6-helix` documents plus the preset names. It is safe - no
+writes, no edit buffer, no preset loads.
+
+```powershell
+.\.venv\Scripts\python.exe backup_now.py
+```
+
+`backups/` is git-ignored, so your presets are never committed. Restore is not
+built yet (M8).
 
 ---
 

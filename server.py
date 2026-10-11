@@ -5,8 +5,8 @@ Run via an MCP client (OpenCode/Claude/Cursor) or directly:
 
     .venv\\Scripts\\python server.py
 
-Currently exposes read-only tools (M0). Destructive tools land later and carry
-an explicit-confirmation requirement.
+Exposes read-only tools plus edit-buffer writes (set block model, footswitch
+assign, reload/save). Firmware/DFU is never touched.
 """
 
 from __future__ import annotations
@@ -96,6 +96,41 @@ def read_footswitch(switch: int) -> dict:
         switch: Footswitch number, 1-based.
     """
     return _guard(device.read_footswitch, switch)
+
+
+@mcp.tool()
+def read_preset_at(setlist: int, index: int) -> dict:
+    """Read a stored preset by slot WITHOUT loading it (read-only).
+
+    Reads flash, so it shows what is saved, unaffected by the edit buffer.
+
+    Args:
+        setlist: Setlist number, 0-based.
+        index: Preset index within the setlist, 0-based.
+    """
+    return _guard(device.read_preset_at, setlist, index)
+
+
+@mcp.tool()
+def reload_current_preset() -> dict:
+    """Discard any unsaved edit buffer by re-loading the current preset.
+
+    Use after host edits you don't want to keep, or to un-stick a front panel
+    showing a stranded edit.
+    """
+    return _guard(device.reload_current_preset)
+
+
+@mcp.tool()
+def save_current_preset(name: str = "") -> dict:
+    """DESTRUCTIVE: commit the edit buffer to the current preset's slot (flash).
+
+    Overwrites the slot. Back up first.
+
+    Args:
+        name: New preset name; empty keeps the current name.
+    """
+    return _guard(device.save_current_preset, name or None)
 
 
 @mcp.tool()

@@ -436,6 +436,25 @@ class Session:
             raise HxError("preset response was not a blob")
         return bytes(v)
 
+    def read_preset_at(self, setlist: int, index: int) -> Optional[bytes]:
+        """Read a stored preset by slot, WITHOUT loading it (opcode 4).
+
+        Reads flash, not the edit buffer, and leaves the loaded preset and the
+        player's sound alone. ``None`` is an empty slot.
+        """
+        v = self.request(
+            op.DATA,
+            op.OP_FETCH_PRESET,
+            {op.K_SETLIST: setlist, op.K_PRESET_INDEX: index, op.K_ARGS: 2},
+        )
+        if v is None:
+            return None
+        if isinstance(v, str):
+            v = v.encode("utf-8")
+        if not isinstance(v, (bytes, bytearray)):
+            raise HxError("stored-preset response was not a blob")
+        return bytes(v)
+
     def setlists(self) -> list[str]:
         result = self.request(op.CONTROL, op.OP_LIST_SETLISTS, None)
         if not isinstance(result, list):
@@ -497,9 +516,60 @@ class Session:
         """Put a block's bypass on a footswitch. ``switch0`` is zero-based."""
         self.request(op.DATA, op.OP_ASSIGN_FOOTSWITCH, {op.K_BLOCK: block, op.K_SWITCH: switch0})
 
+    def unassign_bypass_footswitch(self, block: int, switch0: int) -> None:
+        """Take a block's bypass off a footswitch. ``switch0`` is zero-based."""
+        self.request(op.DATA, op.OP_UNASSIGN_FOOTSWITCH, {op.K_BLOCK: block, op.K_SWITCH: switch0})
+
+    def clear_block(self, block: int) -> None:
+        """Empty a block slot. The device wants the cursor on it first (done here)."""
+        self.select_block(block)
+        self.request(op.DATA, op.OP_CLEAR_BLOCK, {op.K_BLOCK: block})
+
     def read_switch(self, switch1: int) -> Any:
         """A footswitch's configuration (one-based in, zero-based out)."""
         return self.request(op.DATA, op.OP_FOOTSWITCH_CONFIG, {op.K_SWITCH: switch1})
+
+    def save_preset(self, setlist: int, index: int, name: str) -> None:
+        """Commit the edit buffer to a slot (opcode 71 = File > Save Preset).
+
+        A flash write: the device answers at once but commits a moment later,
+        so pace before the next flash write. DESTRUCTIVE - overwrites the slot.
+        """
+        self.request(
+            op.DATA,
+            op.OP_SAVE_PRESET,
+            {op.K_SETLIST: setlist, op.K_PRESET_INDEX: index, op.K_NAME: name},
+        )
+        time.sleep(0.75)
+
+    def select_preset(self, setlist: int, index: int, timeout: float = 12.0) -> bool:
+        """Load a preset by slot, waiting until the device reports it current.
+
+        A select is deferred, so this polls the device's own current-slot
+        report rather than trusting the immediate acknowledgement. Re-selecting
+        the loaded slot also reloads its stored state, which discards an
+        unsaved edit buffer - the escape hatch for a stranded host edit.
+        """
+        self.request(
+            op.DATA,
+            op.OP_SELECT_PRESET,
+            {op.K_SETLIST: setlist, op.K_PRESET_INDEX: index},
+        )
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                self.poll_notifications()
+                self.keepalive()
+            except Exception:
+                pass
+            try:
+                sl, idx, _ = self.preset_info()
+            except HxDeviceError:
+                sl = idx = None
+            if sl == setlist and idx == index:
+                return True
+            time.sleep(0.15)
+        return False
 
     def poll_notifications(self) -> list[tuple[int, Any]]:
         self.read_available(0.02)

@@ -215,6 +215,68 @@ def read_footswitch(switch: int) -> dict:
         return {"switch": switch, "config": session.read_switch(switch)}
 
 
+def read_preset_at(setlist: int, index: int) -> dict:
+    """Read a stored preset by slot without loading it (read-only).
+
+    Reads flash, so it shows what is actually saved - unaffected by the edit
+    buffer. Handy for checking whether a write ever reached storage.
+    """
+    with open_session() as session:
+        blob = session.read_preset_at(setlist, index)
+    if blob is None:
+        return {"setlist": setlist, "index": index, "empty": True}
+    blocks = None
+    try:
+        _, _, tone = session_mod.parse_preset(blob)
+        blocks = _summarise_tone(tone)
+    except HxError:
+        pass
+    return {"setlist": setlist, "index": index, "empty": False, "bytes": len(blob), "blocks": blocks}
+
+
+def clear_block(block: int) -> dict:
+    """WRITE: empty a block slot (removes whatever model is there).
+
+    Edit-buffer only; a preset reload reverts it.
+    """
+    with open_session() as session:
+        session.clear_block(block)
+    return {"ok": True, "block": block, "cleared": True}
+
+
+def unassign_block_footswitch(block: int, switch: int) -> dict:
+    """WRITE: take a block's on/off off a footswitch. ``switch`` is 1-based."""
+    if switch < 1:
+        raise HxError("footswitch numbers are 1-based (1, 2, 3 ...)")
+    with open_session() as session:
+        session.unassign_bypass_footswitch(block, switch - 1)
+    return {"ok": True, "block": block, "switch": switch}
+
+
+def reload_current_preset() -> dict:
+    """Discard any unsaved edit buffer by re-loading the current slot.
+
+    Use after host edits you don't want to keep, or to un-stick a front panel
+    that is showing a stranded edit. Read-mostly; restores stored state.
+    """
+    with open_session() as session:
+        setlist, index, name = session.preset_info()
+        ok = session.select_preset(setlist, index)
+    return {"ok": ok, "setlist": setlist, "index": index, "name": name}
+
+
+def save_current_preset(name: Optional[str] = None) -> dict:
+    """DESTRUCTIVE: commit the edit buffer to the loaded preset's slot (flash write).
+
+    Overwrites the slot. Without this an edit lives only in the buffer and the
+    front panel can get stranded on it. Back up first.
+    """
+    with open_session() as session:
+        setlist, index, current = session.preset_info()
+        session.save_preset(setlist, index, name or current)
+    return {"ok": True, "setlist": setlist, "index": index, "name": name or current}
+
+
 def _summarise_tone(tone: Any) -> list[dict]:
     blocks: list[dict] = []
     if not isinstance(tone, dict):

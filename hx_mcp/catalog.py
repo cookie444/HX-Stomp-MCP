@@ -111,6 +111,8 @@ class Catalog:
         self.install = install if install is not None else find_hx_edit()
         #: index -> Helix.sym symbol (the wire model number is the index).
         self.symbols: list[str] = []
+        #: symbol -> ordered parameter names (the device's parameter index order).
+        self.params: dict[str, list[str]] = {}
         #: symbolicID -> definition record (name, category, params, ...).
         self.defs: dict[str, dict] = {}
         if self.install is not None:
@@ -119,12 +121,15 @@ class Catalog:
     def _load(self) -> None:
         assert self.install is not None
         try:
-            self.symbols = [
-                str(entry.get("symbol", ""))
-                for entry in json.loads(open(self.install.helix_sym, encoding="utf-8").read())
-            ]
+            doc = json.loads(open(self.install.helix_sym, encoding="utf-8").read())
+            self.symbols = [str(entry.get("symbol", "")) for entry in doc]
+            self.params = {
+                str(entry.get("symbol", "")): [str(p) for p in (entry.get("parameters") or [])]
+                for entry in doc
+            }
         except (OSError, json.JSONDecodeError):
             self.symbols = []
+            self.params = {}
         path = self.install.model_defs_bin
         if path:
             try:
@@ -163,6 +168,20 @@ class Catalog:
 
     def names_for(self, numbers) -> dict[int, str]:
         return {n: self.display_name(n) for n in numbers}
+
+    def param_names(self, number: int) -> list[str]:
+        """Ordered parameter names for a model - their device index order."""
+        if not (0 <= number < len(self.symbols)):
+            return []
+        symbol = self.symbols[number]
+        return list(self.params.get(symbol) or self.params.get(_base_symbol(symbol)) or [])
+
+    def param_index(self, number: int, name: str) -> int | None:
+        """The wire parameter index (key 28) for a named parameter."""
+        for i, pname in enumerate(self.param_names(number)):
+            if pname.lower() == name.lower():
+                return i
+        return None
 
 
 #: Cached default catalog, so tool calls don't reparse ~1 MB every time.

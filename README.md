@@ -9,6 +9,14 @@ IRs, globals and backups.
 > messages. Firmware update is the one operation that can brick an HX Stomp, and
 > it is permanently out of scope. See [Safety](#safety).
 
+> ⚠️ **DESKTOP BETA — editing breaks the pedal's scroll.** Writing a preset over
+> USB currently leaves the HX Stomp's front panel **unable to scroll or switch
+> presets**, and it can wedge hard enough to **drop off the USB bus** (recovery:
+> pull the **9V power adapter**, not the USB cable). Treat this as a **desktop
+> editor only**: build a tone, **save it**, then leave the pedal's preset knob
+> alone until you have reloaded. **Reads are always safe** — device info, preset
+> lists, tone inspection and the full backup never wedge it.
+
 ---
 
 ## Status
@@ -167,38 +175,34 @@ M4-M8 and must require explicit user confirmation.
 
 ## Known issues
 
-### Host-side writes can wedge the HX Stomp - currently unsafe
+### Editing breaks the front panel's scroll - desktop beta [IMPORTANT]
 
-Changing a block's model (and likely the other write tools) has repeatedly driven
-the test unit into a state where the **front-panel editing freezes and the device
-drops off the USB bus** (`CM_PROB_PHANTOM`). Recovery is a full **9V power pull**
-(a USB replug is not enough); a factory reset is the last resort and wipes user
-data.
+A host-side edit (model change or parameter write) leaves the pedal **unable to
+scroll or switch presets**, and scrolling afterwards can wedge it off the USB bus
+(`CM_PROB_PHANTOM`). Because of this the tool is a **desktop editor only for
+now**: build the tone, **save it**, reload, and only then touch the pedal's
+preset knob. Recovery from a wedge is a full **9V power pull**; a factory reset is
+the last resort and wipes user data.
 
-It is **not** the edit itself - the write is acknowledged and the new model
-reads back correctly. It happens both when the host disconnects immediately and
-when it keeps a persistent session open, so it is not the "stranded edit" case
-the reference projects describe. Reads have never caused it (thousands of preset
-reads and a full 126-preset backup, no issues).
+Reads are unaffected - `get_device_info`, `list_presets`, `read_current_preset`,
+`read_preset_at`, `read_footswitch`, `model_name`, `find_model` and
+`backup_presets` have never caused a wedge.
 
-**Until this is understood, treat the server as read-only on real hardware.**
+### opcode 40 locks the device if you RECONNECT between edits
 
-- Safe: `get_device_info`, `list_setlists`, `list_presets`, `read_current_preset`,
-  `read_preset_at`, `read_footswitch`, `model_name`, `find_model`, and the backup
-  script.
-- Unsafe (do not call): `set_block_model`, `assign_block_footswitch`,
-  `clear_block`, `unassign_block_footswitch`, `save_current_preset`.
-- Do not reload or scroll the pedal while an uncommitted host edit sits in the
-  buffer.
+The root cause of most of the wedging: a model change (opcode 40) puts the device
+into a transient busy state, and **opening a new session / reconnecting between
+edits** then fails ("Access denied") and can wedge it. Doing **all edits in one
+session, no reconnects**, works (the persistent session in
+`hx_mcp/session_manager.py` does this). Never open the device per edit.
 
 ### A drain loop that acknowledges after every read desyncs the session
 
 Draining unsolicited notifications is required (an unread queue is the #1 wedge
 cause), but **acknowledging after every individual read** burns sequence numbers
 mid-transaction, and the *next* request then times out - the exact trap the
-reference documents. The normal request flow (drain, then acknowledge idle
-channels, with the busy channel's acknowledgement riding its own frame) is
-correct; never add a blanket "ack after each read" loop.
+reference documents. The normal request flow is correct; never add a blanket
+"ack after each read" loop.
 
 ### Persistent session
 

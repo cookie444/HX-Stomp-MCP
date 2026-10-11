@@ -512,6 +512,20 @@ class Session:
         """Switch a block in (True) or out (False) of the signal path."""
         self.request(op.DATA, op.OP_SET_ENABLED, {op.K_BLOCK: block, op.K_ENABLED: enabled})
 
+    def set_param(self, block: int, index: int, value: Any) -> None:
+        """Set one parameter (opcode 30). ``index`` is the Helix.sym param index."""
+        self.request(
+            op.DATA,
+            op.OP_SET_PARAM,
+            {
+                op.K_BLOCK: block,
+                op.K_COMMIT: True,
+                op.K_PATH: 0,
+                op.K_PARAM_INDEX: index,
+                op.K_VALUE: value,
+            },
+        )
+
     def assign_bypass_footswitch(self, block: int, switch0: int) -> None:
         """Put a block's bypass on a footswitch. ``switch0`` is zero-based."""
         self.request(op.DATA, op.OP_ASSIGN_FOOTSWITCH, {op.K_BLOCK: block, op.K_SWITCH: switch0})

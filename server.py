@@ -66,16 +66,16 @@ def read_current_preset() -> dict:
 def set_block_model(block: int, model: int, save: bool = False) -> dict:
     """WRITE: change what a block is, by numeric wire model number.
 
-    Nothing is written to the preset by default - the change lives only in the
-    edit buffer and a reload/scroll discards it. After such an edit the device's
-    own edit UI can misbehave until you reload, so finish with reload_current_preset
-    (discard) - or pass save=True to commit it permanently (overwrites the slot).
-    Model numbers are Helix.sym indices; use model_name/find_model for names.
+    A write always finishes cleanly: with save=True the change is committed to
+    the preset (permanent); otherwise it is applied and then discarded, so the
+    device is never left on a stranded edit (which breaks on-device editing and
+    can wedge the pedal). Model numbers are Helix.sym indices; use
+    model_name/find_model for names.
 
     Args:
         block: Slot index (0 = input; effect slots are 1..8).
         model: Numeric model number, e.g. 247 is the "Room" reverb.
-        save: Commit the preset permanently (default False = edit buffer only).
+        save: True commits permanently; False (default) applies then discards.
     """
     return _guard(device.set_block_model, block, model, None, save)
 
@@ -84,12 +84,12 @@ def set_block_model(block: int, model: int, save: bool = False) -> dict:
 def assign_block_footswitch(block: int, switch: int, save: bool = False) -> dict:
     """WRITE: put a block's on/off (bypass) on a footswitch. switch is 1-based.
 
-    Edit-buffer only unless save=True. Finish with reload_current_preset.
+    Committed when save=True, otherwise applied then discarded.
 
     Args:
         block: Slot index of the block.
         switch: Footswitch number, 1-based.
-        save: Commit the preset permanently (default False = edit buffer only).
+        save: True commits permanently; False (default) applies then discards.
     """
     return _guard(device.assign_block_footswitch, block, switch, save)
 

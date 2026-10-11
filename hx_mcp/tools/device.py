@@ -189,35 +189,47 @@ def read_current_preset() -> dict:
 def _commit(session: Session) -> None:
     """Commit the edit buffer to the loaded preset's slot (flash write).
 
-    Only used when a write tool is called with ``save=True``; overwrites the
-    stored preset.
+    Overwrites the stored preset. Only for an explicit ``save=True``.
     """
     setlist, index, name = session.preset_info()
     session.save_preset(setlist, index, name)
 
 
+def _discard(session: Session) -> None:
+    """Re-load the current preset, throwing away the edit buffer.
+
+    Called after a non-saving write so the device is NEVER left on a stranded
+    edit - which breaks on-device editing and can wedge the unit (needing a 9V
+    pull). A write tool therefore always ends with either a commit or this.
+    """
+    setlist, index, _ = session.preset_info()
+    session.select_preset(setlist, index)
+
+
 def set_block_model(
     block: int, model: int, paired: Optional[int] = None, save: bool = False
 ) -> dict:
-    """Change what a block is, by numeric wire model number (WRITE, edit buffer).
+    """Change what a block is, by numeric wire model number (WRITE).
 
-    Nothing is written to the preset by default: the change lives only in the
-    edit buffer, and a reload/scroll discards it. After such an edit the device's
-    own edit UI can misbehave until you reload, so finish with a reload - or pass
-    save=True to commit it permanently (overwrites the slot). Model numbers are
+    A write always finishes cleanly: with ``save=True`` the change is committed
+    to the preset (permanent); otherwise it is applied and then immediately
+    discarded by reloading, so the device is NEVER left on a stranded edit
+    (which breaks on-device editing and can wedge the pedal). Model numbers are
     Helix.sym indices; names need the HX Edit catalog.
     """
     with open_session() as session:
         session.set_model(block, model, paired)
         if save:
             _commit(session)
+        else:
+            _discard(session)
     return {"ok": True, "block": block, "model": model, "paired": paired, "saved": save}
 
 
 def assign_block_footswitch(block: int, switch: int, save: bool = False) -> dict:
     """Put a block's bypass (on/off) on a footswitch. ``switch`` is 1-based (WRITE).
 
-    Edit-buffer only unless ``save=True`` (which commits permanently).
+    Committed when ``save=True``, otherwise applied then discarded.
     """
     if switch < 1:
         raise HxError("footswitch numbers are 1-based (1, 2, 3 ...)")
@@ -225,6 +237,8 @@ def assign_block_footswitch(block: int, switch: int, save: bool = False) -> dict
         session.assign_bypass_footswitch(block, switch - 1)
         if save:
             _commit(session)
+        else:
+            _discard(session)
     return {"ok": True, "block": block, "switch": switch, "saved": save}
 
 
@@ -256,12 +270,14 @@ def read_preset_at(setlist: int, index: int) -> dict:
 def clear_block(block: int, save: bool = False) -> dict:
     """WRITE: empty a block slot (removes whatever model is there).
 
-    Edit-buffer only unless ``save=True``.
+    Committed when ``save=True``, otherwise applied then discarded.
     """
     with open_session() as session:
         session.clear_block(block)
         if save:
             _commit(session)
+        else:
+            _discard(session)
     return {"ok": True, "block": block, "cleared": True, "saved": save}
 
 
@@ -273,6 +289,8 @@ def unassign_block_footswitch(block: int, switch: int, save: bool = False) -> di
         session.unassign_bypass_footswitch(block, switch - 1)
         if save:
             _commit(session)
+        else:
+            _discard(session)
     return {"ok": True, "block": block, "switch": switch, "saved": save}
 
 

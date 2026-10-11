@@ -22,7 +22,6 @@ import time
 from contextlib import contextmanager
 from typing import Iterator, Optional
 
-from hx_mcp.protocol import opcodes as op
 from hx_mcp.session import HxError, HxTimeout, Session
 from hx_mcp.transport import usb
 

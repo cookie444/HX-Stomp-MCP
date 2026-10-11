@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Local captures / secrets - never commit proprietary Line 6 data.
+captures/
+*.hxb
+*.hlx.tmp
+
+# Local machine config (contains absolute personal paths). Ship the example.
+opencode.jsonc
+
+# Local presets / firmware / backups
+*.hlx
+!opencode.example.jsonc
+*.bak
+
+# Zadig driver helper binaries (downloaded, not ours)
+zadig*.exe

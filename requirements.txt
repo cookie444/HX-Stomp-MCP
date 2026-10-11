@@ -1,0 +1,6 @@
+# Runtime dependencies for the HX Stomp MCP server.
+mcp>=1.2.0
+pyusb>=1.2.1
+msgpack>=1.0.0
+# Ships libusb-1.0.dll so pyusb has a backend on Windows without a manual install.
+libusb-package>=1.0.26

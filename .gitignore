@@ -18,6 +18,9 @@ opencode.jsonc
 # Local backups of the user's own presets - NEVER commit these.
 backups/
 
+# Captured tone profiles (the user's own tones).
+tones/
+
 # Local presets / firmware / backups
 *.hlx
 !opencode.example.jsonc

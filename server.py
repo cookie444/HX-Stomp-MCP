@@ -109,6 +109,40 @@ def read_preset_at(setlist: int, index: int) -> dict:
 
 
 @mcp.tool(**_ann(READ))
+def list_tones() -> dict:
+    """List saved tone profiles (preset bases) in ./tones/ (read-only)."""
+    return _guard(device.list_tones)
+
+
+@mcp.tool(**_ann(READ))
+def capture_tone(name: str, reference: str = "") -> dict:
+    """WRITE A FILE (read-only to the pedal): snapshot the current tone as a base.
+
+    Saves the loaded preset's blocks + parameter values to ``tones/<name>.json``,
+    so an approved tone can be rebuilt later with ``apply_tone``. Does not touch
+    the device.
+
+    Args:
+        name: Profile name, e.g. "Reptilia".
+        reference: Optional note, e.g. "Albert Hammond Jr / The Strokes".
+    """
+    return _guard(device.capture_tone, name, reference)
+
+
+@mcp.tool(**_ann(EDIT))
+def apply_tone(name: str) -> dict:
+    """WRITE (beta): rebuild a saved tone profile onto the edit buffer.
+
+    Clears the blocks and applies the profile's models + parameters in one
+    session. Edit buffer only; never saves.
+
+    Args:
+        name: Profile name as returned by list_tones.
+    """
+    return _guard(device.apply_tone, name)
+
+
+@mcp.tool(**_ann(READ))
 def read_block_params(block: int) -> dict:
     """A block's model and every parameter (index, name, current value; read-only).
 
@@ -402,6 +436,37 @@ def prompt_inspect_rig() -> str:
 Call read_current_preset for the chain, then read_block_params for each effect
 block. Describe the signal chain in order and each block's model and key
 settings in plain language. Read-only - do not edit anything.
+"""
+
+
+@mcp.prompt(
+    name="save_tone_base",
+    title="Save this tone as a base",
+    description="Snapshot the approved tone into a reusable profile.",
+)
+def prompt_save_tone_base(name: str, reference: str = "") -> str:
+    ref = f', "{reference}"' if reference else ""
+    return f"""The current tone is approved. Snapshot it as a reusable preset base:
+call capture_tone("{name}"{ref}).
+
+It reads the loaded edit buffer and writes tones/{name}.json - the exact recipe
+(models + every parameter value). It does NOT touch the pedal. Then confirm the
+saved path and list the blocks. Do not edit the device.
+"""
+
+
+@mcp.prompt(
+    name="load_tone_base",
+    title="Rebuild a tone base",
+    description="Rebuild a saved tone profile onto the edit buffer.",
+)
+def prompt_load_tone_base(name: str) -> str:
+    return f"""Rebuild the saved preset base "{name}" onto the HX Stomp edit buffer
+with apply_tone("{name}").
+
+That clears the current blocks and applies the profile's models and parameters
+in one session. Edit buffer only; never save. Then tell the user to play it, and
+call reload_current_preset when they're done.
 """
 
 

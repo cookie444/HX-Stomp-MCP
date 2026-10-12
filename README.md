@@ -164,6 +164,8 @@ Currently exposed:
 | `read_footswitch` | a footswitch's config (what it controls, colour) |
 | `model_name` / `find_model` | resolve wire model numbers <-> names |
 | `backup_presets` | read-only backup of every preset to a file |
+| `capture_tone` | snapshot the current tone to `tones/<name>.json` (a base) |
+| `list_tones` | list saved tone bases |
 | `parse_hlx` | parse an `.hlx` file **offline**, no hardware |
 
 **Write (edit buffer only unless `save=True`; see the desktop-beta caveat)**
@@ -175,6 +177,7 @@ Currently exposed:
 | `assign_block_footswitch` | put a block's on/off (bypass) on a footswitch |
 | `clear_block` | empty a block slot |
 | `unassign_block_footswitch` | take a block's bypass off a footswitch |
+| `apply_tone` | rebuild a saved tone base onto the edit buffer |
 | `save_current_preset` | commit the edit buffer to the slot (permanent) |
 | `reload_current_preset` | discard the edit buffer |
 
@@ -199,6 +202,8 @@ the pedal)
 | `swap_block` | `block`, `to` | change a slot's model, by name |
 | `remove_block` | `block` | empty a slot |
 | `inspect_rig` | - | explain the loaded chain in plain language |
+| `save_tone_base` | `name`, `reference?` | snapshot the approved tone into a base |
+| `load_tone_base` | `name` | rebuild a saved base onto the buffer |
 
 IR upload/delete, global writes and slot restore land in M4-M8 and must require
 explicit user confirmation.

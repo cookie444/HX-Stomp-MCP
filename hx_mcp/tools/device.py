@@ -271,6 +271,51 @@ def read_block_params(block: int) -> dict:
     return {"block": block, "error": "no effect block at that slot"}
 
 
+def capture_tone(name: str, reference: str = "") -> dict:
+    """Snapshot the current edit buffer into a reusable tone profile (read-only).
+
+    Reads the loaded preset and writes ``tones/<name>.json`` - a base that can be
+    rebuilt later with ``apply_tone``. Does not touch the device.
+    """
+    from hx_mcp import tones as tones_mod
+
+    with open_session() as session:
+        profile = tones_mod.capture(session, name, reference)
+    path = tones_mod.save(profile)
+    return {
+        "ok": True,
+        "path": path,
+        "name": name,
+        "blocks": [{"slot": b["slot"], "name": b["name"]} for b in profile["blocks"]],
+    }
+
+
+def list_tones() -> dict:
+    """Saved tone profiles (read-only)."""
+    from hx_mcp import tones as tones_mod
+
+    return {"tones": tones_mod.list_tones()}
+
+
+def apply_tone(name: str) -> dict:
+    """Rebuild a saved tone profile onto the edit buffer (WRITE, one session).
+
+    Clears the blocks and applies the profile's models + parameters. Edit buffer
+    only; never saves.
+    """
+    from hx_mcp import tones as tones_mod
+
+    profile, path = tones_mod.load(name)
+    with open_session() as session:
+        tones_mod.apply(session, profile)
+    return {
+        "ok": True,
+        "name": profile.get("name"),
+        "source": path,
+        "blocks": [{"slot": b["slot"], "name": b["name"]} for b in profile.get("blocks", [])],
+    }
+
+
 def clear_block(block: int, save: bool = False) -> dict:
     """WRITE: empty a block slot (removes whatever model is there).
 

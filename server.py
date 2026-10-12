@@ -109,6 +109,34 @@ def read_preset_at(setlist: int, index: int) -> dict:
 
 
 @mcp.tool(**_ann(READ))
+def read_block_params(block: int) -> dict:
+    """A block's model and every parameter (index, name, current value; read-only).
+
+    Use this before set_block_param to learn the parameter indices.
+
+    Args:
+        block: Slot index of the block.
+    """
+    return _guard(device.read_block_params, block)
+
+
+@mcp.tool(**_ann(EDIT))
+def set_block_param(block: int, index: int, value: float, save: bool = False) -> dict:
+    """WRITE (beta): set one parameter on a block (opcode 30) - shapes the tone.
+
+    Get the index from read_block_params. ⚠️ editing can break the pedal's
+    scroll (see README).
+
+    Args:
+        block: Slot index of the block.
+        index: Parameter index (Helix.sym order), from read_block_params.
+        value: New value; 0.0..1.0 for most knobs (amp knobs are 0..1 == 0..10).
+        save: True commits permanently; False (default) edit-buffer only.
+    """
+    return _guard(device.set_block_param, block, index, value, save)
+
+
+@mcp.tool(**_ann(READ))
 def read_footswitch(switch: int) -> dict:
     """A footswitch's configuration: what it controls and its colour (read-only).
 
@@ -273,6 +301,108 @@ def resource_model_catalog() -> str:
     return json.dumps(
         {"available": catalog.available, "count": len(models), "models": models}, indent=1
     )
+
+
+# ---------------------------------------------------------------- prompts ---
+# Reusable workflows distilled from real use. Each one encodes the rules learned
+# the hard way: research first, build from scratch, one session, edit buffer
+# only, never save, and don't touch the pedal while editing.
+
+
+@mcp.prompt(
+    name="build_tone",
+    title="Build a tone from scratch",
+    description="Build a guitar tone on the HX Stomp edit buffer from an artist/song reference.",
+)
+def prompt_build_tone(reference: str, extra: str = "") -> str:
+    notes = f"\nExtra guidance: {extra}\n" if extra else ""
+    return f"""Build a guitar tone on the connected Line 6 HX Stomp for: {reference}.{notes}
+Follow these rules exactly - they come from hard-won testing.
+
+1. RESEARCH FIRST. Before choosing any model, look up the real rig for
+   "{reference}" (amp, cab, pedals, EQ, and how much gain). Base the tone on what
+   was actually used, not guesswork.
+
+2. FROM SCRATCH. Call read_current_preset, then clear_block on EVERY existing
+   effect block. Nothing may carry over from a previous tone.
+
+3. CHOOSE MODELS BY NAME. Use find_model / model_name to turn names into wire
+   numbers (the number is the Helix.sym index; names come from the user's HX
+   Edit). Usual layout: slot 1 = drive/boost, slot 2 = amp (use the paired
+   amp+cab form). Add delay/reverb ONLY if the real rig used them - many are
+   dry. Keep gain light unless the reference is genuinely heavy.
+
+4. SET THE PARAMETERS - this is what makes it sound right. For each block, call
+   read_block_params to get the parameter indices, then set_block_param to set
+   gain/EQ/mix. Match the researched knob values (amp knobs are 0..1 = 0..10).
+
+5. ONE SESSION, NO RECONNECTS. All edits share the persistent session; never
+   re-open the device between edits.
+
+6. EDIT BUFFER ONLY - NEVER SAVE. Saving is out of scope and has broken the
+   device. Do not call save_current_preset.
+
+7. DON'T TOUCH THE PEDAL. Do not ask the user to scroll or switch presets while
+   editing. Tell them to play it; when they're done, call
+   reload_current_preset to discard.
+
+Finally, summarise the chain: slot -> model name -> the key settings you chose.
+"""
+
+
+@mcp.prompt(
+    name="tweak_tone",
+    title="Tweak the current tone",
+    description="Adjust the current edit buffer, e.g. 'a little more crunch'.",
+)
+def prompt_tweak_tone(change: str) -> str:
+    return f"""Adjust the current HX Stomp edit buffer: "{change}".
+
+Read the chain with read_current_preset, inspect the relevant block with
+read_block_params, and change only what's needed with set_block_param (gain, EQ,
+mix, ...). Prefer the smallest change that achieves "{change}".
+
+Edit buffer only; one session; NEVER save. Summarise exactly what you changed.
+"""
+
+
+@mcp.prompt(
+    name="swap_block",
+    title="Change a block's model",
+    description="Change one slot to a different model, by name.",
+)
+def prompt_swap_block(block: int, to: str) -> str:
+    return f"""On the HX Stomp edit buffer, change slot {block} to "{to}".
+
+Resolve the model with find_model / model_name, set it with set_block_model,
+then give it sensible starting parameters using read_block_params +
+set_block_param. Edit buffer only; never save. Report the new block.
+"""
+
+
+@mcp.prompt(
+    name="remove_block",
+    title="Remove a block",
+    description="Empty a slot in the edit buffer.",
+)
+def prompt_remove_block(block: int) -> str:
+    return f"""Remove the block in slot {block} from the HX Stomp edit buffer with
+clear_block. Edit buffer only; never save.
+"""
+
+
+@mcp.prompt(
+    name="inspect_rig",
+    title="Explain the loaded preset",
+    description="Describe the current signal chain and settings in plain language.",
+)
+def prompt_inspect_rig() -> str:
+    return """Explain the HX Stomp's currently loaded preset.
+
+Call read_current_preset for the chain, then read_block_params for each effect
+block. Describe the signal chain in order and each block's model and key
+settings in plain language. Read-only - do not edit anything.
+"""
 
 
 # ----------------------------------------------------------------- helpers ---

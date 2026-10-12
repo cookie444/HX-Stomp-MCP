@@ -160,6 +160,7 @@ Currently exposed:
 | `list_presets` | preset names in a setlist |
 | `read_current_preset` | name, firmware, blocks with **model names** |
 | `read_preset_at` | read a stored preset **without loading it** |
+| `read_block_params` | a block's parameters (index, name, current value) |
 | `read_footswitch` | a footswitch's config (what it controls, colour) |
 | `model_name` / `find_model` | resolve wire model numbers <-> names |
 | `backup_presets` | read-only backup of every preset to a file |
@@ -170,6 +171,7 @@ Currently exposed:
 | Tool | What it does |
 |---|---|
 | `set_block_model` | change what a block is, by numeric model number |
+| `set_block_param` | set one parameter (opcode 30) - this shapes the tone |
 | `assign_block_footswitch` | put a block's on/off (bypass) on a footswitch |
 | `clear_block` | empty a block slot |
 | `unassign_block_footswitch` | take a block's bypass off a footswitch |
@@ -185,6 +187,18 @@ tools set `destructiveHint`, so clients can gate them.
 |---|---|
 | `hx://device/info` | connected device identity + loaded preset (JSON) |
 | `hx://catalog/models` | wire model number -> name, from your HX Edit (JSON) |
+
+**Prompts** - reusable workflows distilled from real use (each encodes the rules:
+research first, from scratch, one session, buffer only, never save, don't touch
+the pedal)
+
+| Prompt | Args | What |
+|---|---|---|
+| `build_tone` | `reference`, `extra?` | build a tone from scratch for an artist/song |
+| `tweak_tone` | `change` | adjust the current buffer ("a little more crunch") |
+| `swap_block` | `block`, `to` | change a slot's model, by name |
+| `remove_block` | `block` | empty a slot |
+| `inspect_rig` | - | explain the loaded chain in plain language |
 
 IR upload/delete, global writes and slot restore land in M4-M8 and must require
 explicit user confirmation.

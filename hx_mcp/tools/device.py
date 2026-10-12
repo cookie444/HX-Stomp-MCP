@@ -224,6 +224,53 @@ def backup_presets(directory: str = "backups") -> dict:
     }
 
 
+def set_block_param(block: int, index: int, value: float, save: bool = False) -> dict:
+    """Set one parameter on a block (opcode 30). Edit buffer only unless save.
+
+    ``index`` is the parameter's wire index (Helix.sym order) - get it from
+    read_block_params. This is what actually shapes a tone, not just the model.
+    """
+    with open_session() as session:
+        session.set_param(block, index, value)
+        if save:
+            _commit(session)
+    return {"ok": True, "block": block, "index": index, "value": value, "saved": save}
+
+
+def read_block_params(block: int) -> dict:
+    """A block's model and every parameter: index, name and current value.
+
+    Read-only. The names/order come from HX Edit's Helix.sym.
+    """
+    with open_session() as session:
+        blob = session.read_preset_blob()
+    _, _, tone = session_mod.parse_preset(blob)
+    catalog = default_catalog()
+    for i, slot in enumerate(tone.get(0, {}).get(22) or []):
+        if i != block or not isinstance(slot, dict) or slot.get(19) != 6:
+            continue
+        body = slot.get(20) if isinstance(slot.get(20), dict) else {}
+        ref = body.get(24) if isinstance(body.get(24), dict) else {}
+        model = ref.get(25)
+        names = catalog.param_names(model) if isinstance(model, int) else []
+        values = (body.get(11) or {}).get(4) if isinstance(body.get(11), dict) else []
+        params = [
+            {
+                "index": idx,
+                "name": names[idx] if idx < len(names) else f"param {idx}",
+                "value": values[idx] if values and idx < len(values) else None,
+            }
+            for idx in range(max(len(names), len(values or [])))
+        ]
+        return {
+            "block": block,
+            "model": model,
+            "name": catalog.display_name(model) if isinstance(model, int) else None,
+            "params": params,
+        }
+    return {"block": block, "error": "no effect block at that slot"}
+
+
 def clear_block(block: int, save: bool = False) -> dict:
     """WRITE: empty a block slot (removes whatever model is there).
 

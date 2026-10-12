@@ -1,21 +1,25 @@
 # HX Stomp MCP server
 
-An [MCP](https://modelcontextprotocol.io/) server that controls a **Line 6 HX
-Stomp** over its USB vendor protocol - the same on-wire protocol HX Edit uses -
-so an AI assistant can read and edit presets, blocks, parameters, snapshots,
-IRs, globals and backups.
+An [MCP](https://modelcontextprotocol.io/) server for the **Line 6 HX Stomp**
+over its USB vendor protocol - the same on-wire protocol HX Edit uses. It is a
+**buffer-editable** server: an AI can read the device, and edit the **edit
+buffer** (change block models, parameters and footswitch assigns) over USB.
+
+**Scope: edit buffer only. There is no save.** Committing an edit to a preset
+slot (`save_current_preset`) is a **no-go** - on the test unit it broke
+subsequent saves and edits - so it is not part of the product. Do not call it.
 
 > **No firmware. Ever.** This project never sends firmware, flash or DFU
 > messages. Firmware update is the one operation that can brick an HX Stomp, and
 > it is permanently out of scope. See [Safety](#safety).
 
-> ⚠️ **DESKTOP BETA — editing breaks the pedal's scroll.** Writing a preset over
-> USB currently leaves the HX Stomp's front panel **unable to scroll or switch
-> presets**, and it can wedge hard enough to **drop off the USB bus** (recovery:
-> pull the **9V power adapter**, not the USB cable). Treat this as a **desktop
-> editor only**: build a tone, **save it**, then leave the pedal's preset knob
-> alone until you have reloaded. **Reads are always safe** — device info, preset
-> lists, tone inspection and the full backup never wedge it.
+> ⚠️ **DESKTOP BETA — edit-buffer only, and edits break the pedal's scroll.**
+> While an edit sits in the buffer the HX Stomp's front panel **cannot scroll or
+> switch presets**, and it can wedge hard enough to **drop off the USB bus**
+> (recovery: pull the **9V power adapter**, not the USB cable). Workflow: build
+> the tone, **play it, then `reload_current_preset` to discard** - and only then
+> touch the pedal. **Reads are always safe** — device info, preset lists, tone
+> inspection and the full backup never wedge it.
 
 ---
 
@@ -189,14 +193,22 @@ explicit user confirmation.
 
 ## Known issues
 
+### Saving / committing is a no-go
+
+`save_current_preset` (opcode 71) proved damaging on the test unit: after a
+commit, **subsequent saves and edits misbehaved**. The product scope is therefore
+the **edit buffer only** - build a tone, play it, then `reload_current_preset` to
+discard. Never commit. (Backups are unaffected and remain the safe way to
+preserve work.)
+
 ### Editing breaks the front panel's scroll - desktop beta [IMPORTANT]
 
 A host-side edit (model change or parameter write) leaves the pedal **unable to
 scroll or switch presets**, and scrolling afterwards can wedge it off the USB bus
 (`CM_PROB_PHANTOM`). Because of this the tool is a **desktop editor only for
-now**: build the tone, **save it**, reload, and only then touch the pedal's
-preset knob. Recovery from a wedge is a full **9V power pull**; a factory reset is
-the last resort and wipes user data.
+now**: build the tone, play it, then `reload_current_preset` to discard, and only
+then touch the pedal. Recovery from a wedge is a full **9V power pull**; a
+factory reset is the last resort and wipes user data.
 
 Reads are unaffected - `get_device_info`, `list_presets`, `read_current_preset`,
 `read_preset_at`, `read_footswitch`, `model_name`, `find_model` and
